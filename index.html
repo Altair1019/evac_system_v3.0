@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Три здания — тросы для эвакуации по крышам</title>
+  <style>
+    html,body{height:100%;margin:0;}
+    #app{width:100%;height:100%;overflow:hidden;display:flex;}
+    #canvasArea{flex:1;background:#bcd8ff;}
+    #ui{width:320px;padding:12px;background:rgba(255,255,255,0.95);box-shadow:0 6px 24px rgba(0,0,0,0.15);font-family:sans-serif}
+    h2{margin:6px 0 12px;font-size:16px}
+    label{display:block;margin:8px 0;font-size:13px}
+    input[type=range]{width:100%}
+    .btn{display:inline-block;padding:8px 10px;border-radius:6px;background:#2b7ada;color:white;text-decoration:none;cursor:pointer;margin-top:8px}
+    small{color:#555}
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="canvasArea"></div>
+    <div id="ui">
+      <h2>Параметры сцены</h2>
+      <label>Этажи: Здание A <span id="floorA">8</span>
+        <input id="rangeA" type="range" min="3" max="20" value="8">
+      </label>
+      <label>Этажи: Здание B <span id="floorB">12</span>
+        <input id="rangeB" type="range" min="3" max="20" value="12">
+      </label>
+      <label>Этажи: Здание C <span id="floorC">10</span>
+        <input id="rangeC" type="range" min="3" max="20" value="10">
+      </label>
+
+      <label>Длина прогиба троса <span id="sagVal">0.25</span>
+        <input id="sagRange" type="range" min="0" max="0.8" step="0.01" value="0.25">
+      </label>
+
+      <label><input id="showHelpers" type="checkbox"> Показать оси и сетку</label>
+
+      <div style="margin-top:12px">
+        <a class="btn" id="resetBtn">Сбросить камеру</a>
+        <a class="btn" id="exportBtn" style="background:#2da34a">Экспорт сцены (glTF)</a>
+      </div>
+
+      <hr>
+      <small>Откройте этот файл на GitHub Pages для просмотра онлайн. Модели генерируются в браузере — всё содержимое безопасно для размещения в публичном репозитории.</small>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.152.2/build/three.module.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.152.2/examples/jsm/controls/OrbitControls.js';
+    import { GLTFExporter } from 'https://unpkg.com/three@0.152.2/examples/jsm/exporters/GLTFExporter.js';
+
+    const canvasArea = document.getElementById('canvasArea');
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0xbfdfff, 200, 800);
+
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 2000);
+    camera.position.set(80, 80, 140);
+
+    const renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(canvasArea.clientWidth, canvasArea.clientHeight);
+    renderer.setClearColor(0xbfdfff);
+    canvasArea.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 25, 0);
+    controls.update();
+
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.8);
+    hemi.position.set(0, 200, 0);
+    scene.add(hemi);
+    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+    dir.position.set(-100, 140, 100);
+    dir.castShadow = true;
+    scene.add(dir);
+
+    const groundGeo = new THREE.PlaneGeometry(1000,1000);
+    const groundMat = new THREE.MeshPhongMaterial({color:0x9cc77a});
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI/2;
+    ground.position.y = 0;
+    scene.add(ground);
+
+    const axes = new THREE.AxesHelper(60);
+    const grid = new THREE.GridHelper(400, 40);
+    axes.visible = false; grid.visible = false;
+    scene.add(axes, grid);
+
+    function makeWindowTexture(columns=4, rows=8, color='#111', lightColor='#ffe07a'){
+      const cw = 256, ch = 512;
+      const cvs = document.createElement('canvas'); cvs.width = cw; cvs.height = ch;
+      const ctx = cvs.getContext('2d');
+      ctx.fillStyle = '#cfcfcf'; ctx.fillRect(0,0,cw,ch);
+      const w = cw / columns * 0.7; const h = ch / rows * 0.6;
+      const xpad = (cw - columns*w)/(columns+1);
+      const ypad = (ch - rows*h)/(rows+1);
+      for(let r=0;r<rows;r++){
+        for(let c=0;c<columns;c++){
+          const x = xpad + c*(w + xpad);
+          const y = ypad + r*(h + ypad);
+          ctx.fillStyle = (Math.random()<0.5)? lightColor : '#2d2d2d';
+          ctx.fillRect(x,y,w,h);
+          ctx.strokeStyle = '#333'; ctx.strokeRect(x,y,w,h);
+        }
+      }
+      const tex = new THREE.CanvasTexture(cvs); tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(1,1);
+      return tex;
+    }
+
+    function makeBuilding(width, depth, floors){
+      const floorHeight = 3;
+      const height = floors * floorHeight;
+      const geom = new THREE.BoxGeometry(width, height, depth);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: makeWindowTexture(Math.max(2,Math.floor(width/3)), floors*2),
+        roughness:0.9, metalness:0.02
+      });
+      const mesh = new THREE.Mesh(geom, wallMat);
+      mesh.castShadow = mesh.receiveShadow = true;
+      mesh.position.y = height/2;
+      const roofGeo = new THREE.BoxGeometry(width*0.9, 0.4, depth*0.9);
+      const roofMat = new THREE.MeshStandardMaterial({color:0x555555});
+      const roof = new THREE.Mesh(roofGeo, roofMat);
+      roof.position.y = height + 0.2;
+      mesh.add(roof);
+      return {mesh, height};
+    }
+
+    const buildingsGroup = new THREE.Group();
+    scene.add(buildingsGroup);
+
+    const buildingParams = [
+      {x:-50, width:22, depth:18, floors:8},
+      {x:0, width:26, depth:20, floors:12},
+      {x:50, width:20, depth:16, floors:10}
+    ];
+
+    function buildAll(){
+      while(buildingsGroup.children.length) buildingsGroup.remove(buildingsGroup.children[0]);
+      buildingParams.forEach((p, i)=>{
+        const b = makeBuilding(p.width, p.depth, p.floors);
+        b.mesh.position.x = p.x;
+        buildingsGroup.add(b.mesh);
+        p.height = b.height;
+      });
+    }
+
+    buildAll();
+
+    let ropeGroup = new THREE.Group(); scene.add(ropeGroup);
+    function makeRope(p1, p2, sag=0.25){
+      const a = new THREE.Vector3(p1.x, p1.y, p1.z);
+      const b = new THREE.Vector3(p2.x, p2.y, p2.z);
+      const mid = a.clone().lerp(b, 0.5);
+      const sagVec = new THREE.Vector3(0, -Math.max(a.y, b.y) * sag, 0);
+      const cp1 = a.clone().lerp(mid, 0.5).add(sagVec);
+      const cp2 = mid.clone().lerp(b, 0.5).add(sagVec);
+      const curve = new THREE.CubicBezierCurve3(a, cp1, cp2, b);
+      const tubeGeom = new THREE.TubeGeometry(curve, 64, 0.2, 8, false);
+      const mat = new THREE.MeshStandardMaterial({color:0x222222, metalness:0.6, roughness:0.4});
+      const mesh = new THREE.Mesh(tubeGeom, mat);
+      return mesh;
+    }
+
+    function buildRopes(sag=0.25){
+      scene.remove(ropeGroup);
+      ropeGroup = new THREE.Group();
+      const anchors = buildingsGroup.children.map(m=>{
+        const pos = new THREE.Vector3();
+        m.getWorldPosition(pos);
+        const topY = (m.geometry.parameters.height)/2 + m.position.y;
+        return new THREE.Vector3(pos.x, topY + 0.2, pos.z);
+      });
+      if(anchors.length>=2) ropeGroup.add(makeRope(anchors[0], anchors[1], sag));
+      if(anchors.length>=3) ropeGroup.add(makeRope(anchors[1], anchors[2], sag));
+      if(anchors.length>=3) ropeGroup.add(makeRope(anchors[0], anchors[2], sag*0.6));
+      scene.add(ropeGroup);
+    }
+
+    buildRopes(0.25);
+
+    const rangeA = document.getElementById('rangeA');
+    const rangeB = document.getElementById('rangeB');
+    const rangeC = document.getElementById('rangeC');
+    const floorA = document.getElementById('floorA');
+    const floorB = document.getElementById('floorB');
+    const floorC = document.getElementById('floorC');
+    const sagRange = document.getElementById('sagRange');
+    const sagVal = document.getElementById('sagVal');
+    const showHelpers = document.getElementById('showHelpers');
+    const resetBtn = document.getElementById('resetBtn');
+    const exportBtn = document.getElementById('exportBtn');
+
+    function updateFromUI(){
+      buildingParams[0].floors = parseInt(rangeA.value);
+      buildingParams[1].floors = parseInt(rangeB.value);
+      buildingParams[2].floors = parseInt(rangeC.value);
+      floorA.textContent = buildingParams[0].floors;
+      floorB.textContent = buildingParams[1].floors;
+      floorC.textContent = buildingParams[2].floors;
+      buildAll();
+      buildRopes(parseFloat(sagRange.value));
+    }
+
+    rangeA.addEventListener('input', updateFromUI);
+    rangeB.addEventListener('input', updateFromUI);
+    rangeC.addEventListener('input', updateFromUI);
+    sagRange.addEventListener('input', ()=>{ sagVal.textContent = sagRange.value; buildRopes(parseFloat(sagRange.value)); });
+    showHelpers.addEventListener('change', ()=>{ axes.visible = grid.visible = showHelpers.checked; });
+    resetBtn.addEventListener('click', ()=>{ controls.reset(); camera.position.set(80,80,140); controls.update(); });
+
+    exportBtn.addEventListener('click', ()=>{
+      const exporter = new GLTFExporter();
+      exporter.parse(scene, function(result){
+        let output;
+        if(result instanceof ArrayBuffer){
+          output = result;
+          saveArrayBuffer(output, 'scene.glb');
+        } else {
+          output = JSON.stringify(result, null, 2);
+          saveString(output, 'scene.gltf');
+        }
+      }, {binary:true});
+    });
+
+    function saveString(text, filename){
+      const blob = new Blob([text], {type:'text/plain'});
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      link.click();
+    }
+    function saveArrayBuffer(buffer, filename){
+      const blob = new Blob([buffer], {type:'application/octet-stream'});
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      link.click();
+    }
+
+    window.addEventListener('resize', ()=>{
+      camera.aspect = canvasArea.clientWidth / canvasArea.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(canvasArea.clientWidth, canvasArea.clientHeight);
+    });
+
+    function animate(){
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    updateFromUI();
+
+  </script>
+</body>
+</html>
